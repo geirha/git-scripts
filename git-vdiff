@@ -11,6 +11,9 @@ cd "$(git rev-parse --show-toplevel)"
 
 cat > "$vimfile" <<'EOF'
 function! Jump()
+    let selected_lineno = line('.')
+    let linecount = 0
+
     if getline('.')[0:3] == 'diff'
         let diffline = line('.')
     else
@@ -25,7 +28,14 @@ function! Jump()
     else
         let alfaline = search('^@@', 'bn')
     endif
-    let linenumber = matchstr(getline(alfaline), '+\zs\d\+') + 3
+
+    for line in getline(alfaline + 1, selected_lineno)
+        if line[0] != '-'
+            let linecount += 1
+        endif
+    endfor
+
+    let linenumber = matchstr(getline(alfaline), '+\zs\d\+') + linecount - 1
 
     execute 'edit' '+'.linenumber file
 endfunction
