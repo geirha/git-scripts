@@ -1,88 +1,74 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 
-setopt extendedglob
+toplevel=$(git rev-parse --show-toplevel) || exit
 
-[[ $XPLEASE ]] && set -x
-
-if [[ -t 1 ]] || (( $@[(I)--color] > 0 )); then
-    color_header=$(git config --get-color color.diff.meta bold)
-    color_hunk_header=$(git config --get-color color.diff.frag cyan)
-    color_new=$(git config --get-color color.diff.new green)
-    color_old=$(git config --get-color color.diff.old red)
-
-    color=1
+if [[ -t 1 || $GIT_PAGER_IN_USE = true ]] ; then
+  color_header=$(git config --get-color color.diff.meta bold)
+  color_hunk_header=$(git config --get-color color.diff.frag cyan)
+  color_new=$(git config --get-color color.diff.new green)
+  color_old=$(git config --get-color color.diff.old red)
+  sgr0=$(tput sgr0)
 fi
+unset -v GIT_PAGER_IN_USE
 
-toplevel=$(git rev-parse --show-toplevel)
+revs=()
+while IFS= read -r rev ; do
+  revs+=("$rev")
+done < <(git rev-parse --revs-only "$@")
 
-printprefix() {
-    printf '%s' "$@" ' '
-}
-
-parse_porcelain() {
-    reply=()
-
-    output=(${(f)"$(git -C $toplevel --no-pager blame --porcelain -L "$@")"})
-    output=(${(M)output:#[a-f0-9](#c40)*})
-
-    local line
-    for line in $output; do
-        reply+=(${line:0:7})
-    done
-}
-
-revs=(${(f)"$(git rev-parse --revs-only "$@")"})
-
-if (( $#revs == 0 )); then
-    revs=(HEAD '')
-elif (( $#revs == 1 )); then
-    revs=($revs '')
-fi
-
-git diff ${color:+--color} "$@" | while IFS= read -r line; do
-    if [[ $line = ${color_header}diff\ --git* ]]; then
-        IFS= read -r index
-        IFS= read -r a_line
-        IFS= read -r b_line
-
-        file=${b_line#*+++ [iwb2]/}
-        file=${file%$'\e'*}
-        print -lr -- $line $index $a_line $b_line
-    elif [[ $line =~ '@@ -([[:digit:]]*)(,[[:digit:]]*)? \+([[:digit:]]*)(,[[:digit:]]*)? @@' ]]; then
-        oldfrom=$match[1]
-        if [[ -n $match[2] && $match[2] != ,0  ]]; then
-            oldto=${match[2]#,}
-        else
-            oldto=$oldfrom
+git diff "$@" | while IFS= read -r line ; do
+  case $line in
+    (diff\ --git\ *)
+      exec 3<&- 4<&-
+      printf '%s%s%s\n' "$color_header" "$line" "$sgr0"
+      while IFS= read -r line ; do
+        printf '%s%s%s\n' "$color_header" "$line" "$sgr0"
+        if [[ $line = ---* ]] ; then
+          old=1
+          if [[ $line = ---\ /dev/null ]] ; then
+            exec 3< /dev/null
+          elif [[ $line = ---* ]] ; then
+            exec 3< <(git -C "$toplevel" blame "${revs[0]-HEAD}" -- "${line:6}")
+          fi
+        elif [[ $line = +++* ]] ; then
+          new=1
+          if [[ $line = +++\ /dev/null ]] ; then
+            exec 4< /dev/null
+          elif [[ $line = +++* ]] ; then
+            exec 4< <(git -C "$toplevel" blame ${revs[1]+"${revs[1]}"} -- "${line:6}")
+          fi
+          break
         fi
+      done
+    ;;
+    (@@*)
+      [[ $line =~ @@\ ([^@]+)\ @@(.*) ]] || continue
+      ranges=${BASH_REMATCH[1]}
+      context=${BASH_REMATCH[2]}
+      printf '%s@@ %s @@%s%s\n' "$color_hunk_header" "$ranges" "$sgr0" "$context"
+      [[ $ranges =~ -([[:digit:]]+),[[:digit:]]+' +'([[:digit:]]+), ]] || continue
+      oldfrom=${BASH_REMATCH[1]}
+      newfrom=${BASH_REMATCH[2]}
 
-        newfrom=$match[3]
-        if [[ -n $match[4] && $match[2] != ,0 ]]; then
-            newto=${match[4]#,}
-        else
-            newto=$newfrom
-        fi
-
-        parse_porcelain $oldfrom,+$oldto $revs[1] -- $file
-        oldblame=($reply)
-        parse_porcelain $newfrom,+$newto $revs[2] -- $file
-        newblame=($reply)
-
-        oldindex=1
-        newindex=1
-
-        print -r -- $line
-    else
-        if [[ $line = ' '* ]]; then
-            printprefix $newblame[newindex]
-            ((newindex++))
-            ((oldindex++))
-        elif [[ $line = $color_old-* ]]; then
-            printprefix $color_old $oldblame[oldindex++]
-        elif [[ $line = $color_new+* ]]; then
-            printprefix $color_new $newblame[newindex++]
-        fi
-
-        print -r -- $line
-    fi
+      for (( ; old < oldfrom; old++ )) ; do read -ru 3 _ || break ; done
+      for (( ; new < newfrom; new++ )) ; do read -ru 4 _ || break ; done
+    ;;
+    (' '*)
+      read -ru 3 _
+      ((old++))
+      read -ru 4 hash _
+      ((new++))
+      printf '%s %s\n' "${hash::7}" "$line"
+    ;;
+    (-*)
+      read -ru 3 hash _
+      ((old++))
+      printf '%s%s %s%s\n' "$color_old" "${hash::7}" "$line" "$sgr0"
+    ;;
+    (+*)
+      read -ru 4 hash _
+      ((new++))
+      printf '%s%s %s%s\n' "$color_new" "${hash::7}" "$line" "$sgr0"
+    ;;
+  esac
 done
