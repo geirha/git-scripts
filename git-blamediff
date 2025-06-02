@@ -2,7 +2,23 @@
 
 toplevel=$(git rev-parse --show-toplevel) || exit
 
-if [[ -t 1 || $GIT_PAGER_IN_USE = true ]] ; then
+color=auto args=()
+while (( $# > 0 )) ; do
+  case $1 in
+    (--color|--color=always) color=always ;;
+    (--no-color|--color=never) color=never ;;
+    (--color=auto) color=auto ;;
+    (--cached|--staged) args+=( "$1" ) ;;
+    (--|''|[!-]*) break ;;
+    (*) printf >&2 '%s: Unknown option: %s\n' "$0" "$1" ; exit 1 ;;
+  esac
+  shift
+done
+args+=( "$@" )
+
+if [[ $color = never ]] ; then
+  :
+elif [[ $color = always || -t 1 || $GIT_PAGER_IN_USE = true ]] ; then
   color_header=$(git config --get-color color.diff.meta bold)
   color_hunk_header=$(git config --get-color color.diff.frag cyan)
   color_new=$(git config --get-color color.diff.new green)
@@ -16,7 +32,7 @@ while IFS= read -r rev ; do
   revs+=("$rev")
 done < <(git rev-parse --revs-only "$@")
 
-git diff "$@" | while IFS= read -r line ; do
+git diff "${args[@]}" | while IFS= read -r line ; do
   case $line in
     (diff\ --git\ *)
       exec 3<&- 4<&-
